@@ -41,5 +41,26 @@ public class MeshDebug : MonoBehaviour
             Vector3 worldNormal = transform.TransformDirection(normals[i]);
             Gizmos.DrawLine(worldPos, worldPos + worldNormal * 0.2f);
         }
+
+        foreach (var n in normals)
+        {
+            if (n == Vector3.zero)
+                Debug.Log("zeroN");
+        }
+
+        // are any pos/normal pairs duplicates?
+        var hs = new HashSet<(Vector3, Vector3)>();
+        var x = vertices
+            .Zip(
+                normals,
+                (x, y) =>
+                {
+                    if (!hs.Add((x, y)))
+                        Debug.Log($"{(x, y)} is dupe");
+
+                    return (x, y);
+                }
+            )
+            .ToList();
     }
 }
