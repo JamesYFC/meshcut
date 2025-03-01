@@ -36,7 +36,7 @@ public static class MeshCut
         }
     }
 
-    public readonly struct VData
+    public readonly struct VData : IEquatable<VData>
     {
         public readonly Vector3 VertexPosition;
         public readonly Vector2 UV;
@@ -71,6 +71,8 @@ public static class MeshCut
                 return false;
             }
         }
+
+        public bool Equals(VData other) => this == other;
 
         // override object.GetHashCode
         public override int GetHashCode()
@@ -249,9 +251,9 @@ public static class MeshCut
         // todo fill
 
         // create two meshes now with the positive and negative side vertices
-        Debug.Log(
-            $"original count: {mesh.triangles.Length}, pos count: {positiveUVertTris[0].Count}, neg count: {negativeUVertTris[0].Count}, total: {positiveUVertTris[0].Count + negativeUVertTris[0].Count}"
-        );
+        // Debug.Log(
+        //     $"original count: {mesh.triangles.Length}, pos count: {positiveUVertTris[0].Count}, neg count: {negativeUVertTris[0].Count}, total: {positiveUVertTris[0].Count + negativeUVertTris[0].Count}"
+        // );
 
         Mesh GetMesh(List<List<VData>> vData)
         {
@@ -304,22 +306,9 @@ public static class MeshCut
         // positive side
         Mesh posSideMesh = GetMesh(positiveUVertTris);
 
-        if (posSideMesh.normals.Any(n => n == Vector3.zero))
-            Debug.LogError("zero!");
-        //posSideMesh.Optimize();
-        //posSideMesh.RecalculateNormals();
-        if (posSideMesh.normals.Any(n => n == Vector3.zero))
-            Debug.LogError("zero postRecalc!");
-
         // negative side
         Mesh negSideMesh = GetMesh(negativeUVertTris);
 
-        if (negSideMesh.normals.Any(n => n == Vector3.zero))
-            Debug.LogError("zero!");
-        //negSideMesh.Optimize();
-        //negSideMesh.RecalculateNormals();
-        if (negSideMesh.normals.Any(n => n == Vector3.zero))
-            Debug.LogError("zero postRecalc!");
         return (posSideMesh, negSideMesh);
     }
 
