@@ -1,0 +1,93 @@
+using System;
+using System.Collections.Generic;
+using UnityEngine;
+using UnityEngine.Pool;
+
+public static class Extensions
+{
+    /// <summary>
+    /// Groups the enumerable by 3s. Will error if there are any remainder items.
+    /// </summary>
+    /// <typeparam name="T"></typeparam>
+    /// <param name="source"></param>
+    /// <returns></returns>
+    /// <exception cref="ArgumentException"></exception>
+    public static IEnumerable<(T a, T b, T c)> GroupByTripletsStrict<T>(this IEnumerable<T> source)
+        where T : struct
+    {
+        using var iterator = source.GetEnumerator();
+        while (iterator.MoveNext())
+        {
+            T first = iterator.Current;
+
+            if (!iterator.MoveNext())
+            {
+                throw new ArgumentException("enumerable is not in 3s");
+            }
+
+            T second = iterator.Current;
+
+            if (!iterator.MoveNext())
+            {
+                throw new ArgumentException("enumerable is not in 3s");
+            }
+
+            T third = iterator.Current;
+
+            yield return (first, second, third);
+        }
+    }
+
+    public static List<T> Flatten<T>(this IEnumerable<(T, T, T)> source)
+    {
+        List<T> result = new();
+
+        foreach (var (a, b, c) in source)
+        {
+            result.Add(a);
+            result.Add(b);
+            result.Add(c);
+        }
+
+        return result;
+    }
+
+    public static bool IntersectsSegment(
+        this Plane plane,
+        Vector3 start,
+        Vector3 end,
+        out Vector3 intersectPoint
+    )
+    {
+        intersectPoint = Vector3.zero;
+
+        var planeNormal = plane.normal;
+        var planePoint = plane.ClosestPointOnPlane(Vector3.zero);
+        Vector3 segDisplacement = end - start;
+
+        float denominator = Vector3.Dot(planeNormal, segDisplacement);
+        if (denominator == 0)
+            return false;
+
+        var normalisedDistRatio = Vector3.Dot(planeNormal, planePoint - start) / denominator;
+
+        if (normalisedDistRatio < 0 || normalisedDistRatio > 1)
+            return false;
+
+        intersectPoint = start + normalisedDistRatio * segDisplacement;
+        return true;
+    }
+
+    public static T FindDuplicate<T>(this IEnumerable<T> values)
+    {
+        using var _hs = HashSetPool<T>.Get(out var hashSet);
+        foreach (var val in values)
+        {
+            if (!hashSet.Add(val))
+                return val;
+        }
+
+        Debug.LogError($"found no duplicates in {values}");
+        return default;
+    }
+}
