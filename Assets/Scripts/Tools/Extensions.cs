@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Pool;
@@ -89,5 +90,34 @@ public static class Extensions
 
         Debug.LogError($"found no duplicates in {values}");
         return default;
+    }
+
+    public readonly struct PooledArray<T> : IDisposable
+    {
+        private readonly T[] array;
+        private readonly ArrayPool<T> pool;
+
+        public PooledArray(T[] array, ArrayPool<T> pool)
+        {
+            this.array = array;
+            this.pool = pool;
+        }
+
+        public readonly void Dispose()
+        {
+            pool.Return(array);
+        }
+    }
+
+    public static PooledArray<T> GetPooledSegment<T>(
+        this ArrayPool<T> arrayPool,
+        int length,
+        out ArraySegment<T> segment
+    )
+    {
+        var rentedArray = arrayPool.Rent(length);
+        segment = new(rentedArray, 0, length);
+
+        return new(rentedArray, arrayPool);
     }
 }

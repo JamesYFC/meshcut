@@ -1,7 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
-using UnityEngine.InputSystem;
 
 public class MeshDebug : MonoBehaviour
 {
@@ -33,6 +32,8 @@ public class MeshDebug : MonoBehaviour
         Mesh mesh = meshFilter.sharedMesh;
         Vector3[] vertices = mesh.vertices;
         Vector3[] normals = mesh.normals;
+        Vector2[] uvs = mesh.uv;
+        Vector2[] uv2s = mesh.uv2;
 
         Gizmos.color = Color.green; // Color for normals
         for (int i = 0; i < vertices.Length; i++)
@@ -42,25 +43,35 @@ public class MeshDebug : MonoBehaviour
             Gizmos.DrawLine(worldPos, worldPos + worldNormal * 0.2f);
         }
 
-        foreach (var n in normals)
+        for (int i = 0; i < normals.Length; i++)
         {
+            Vector3 n = normals[i];
             if (n == Vector3.zero)
-                Debug.Log("zeroN");
+                Debug.Log("zeroN at " + i);
+        }
+        Debug.Log("ALL:");
+        Debug.Log(
+            string.Join(
+                ", ",
+                vertices.Select((v, i) => i + ": " + (vertices[i], uvs[i], normals[i]) + "\n")
+            )
+        );
+        // are any vdata dupes?
+        var hs = new Dictionary<(Vector3, Vector2, Vector3), (int index, int count)>();
+        for (int i = 0; i < vertices.Length; i++)
+        {
+            var v = (vertices[i], uvs[i], normals[i]);
+            if (!hs.TryAdd(v, (i, 1)))
+            {
+                var (index, count) = hs[v];
+                Debug.Log($"{v} occurred at {i}, but is also occurring at {index}");
+                hs[v] = (index, count + 1);
+            }
         }
 
-        // are any pos/normal pairs duplicates?
-        var hs = new HashSet<(Vector3, Vector3)>();
-        var x = vertices
-            .Zip(
-                normals,
-                (x, y) =>
-                {
-                    if (!hs.Add((x, y)))
-                        Debug.Log($"{(x, y)} is dupe");
-
-                    return (x, y);
-                }
-            )
-            .ToList();
+        var dupes = hs.Where(kvp => kvp.Value.count > 1).ToList();
+        Debug.Log($"dupes({dupes.Count}): {string.Join(", ", dupes)}");
+        mesh.Optimize();
+        Debug.Log($"new dupes({dupes.Count}): {string.Join(", ", dupes)}");
     }
 }

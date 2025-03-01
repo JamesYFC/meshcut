@@ -36,11 +36,18 @@ public static class MeshCut
         }
     }
 
-    public struct VData
+    public readonly struct VData
     {
-        public Vector3 VertexPosition;
-        public Vector2 UV;
-        public Vector3 Normal;
+        public readonly Vector3 VertexPosition;
+        public readonly Vector2 UV;
+        public readonly Vector3 Normal;
+
+        public VData(Vector3 pos, Vector2 uv, Vector3 normal)
+        {
+            VertexPosition = pos;
+            UV = uv;
+            Normal = normal;
+        }
 
         public static bool operator ==(VData thisVData, VData other) =>
             thisVData.VertexPosition == other.VertexPosition
@@ -51,6 +58,27 @@ public static class MeshCut
             thisVData.VertexPosition != other.VertexPosition
             || thisVData.UV != other.UV
             || thisVData.Normal != other.Normal;
+
+        // override object.Equals
+        public override bool Equals(object obj)
+        {
+            if (obj is VData vData)
+            {
+                return this == vData;
+            }
+            else
+            {
+                return false;
+            }
+        }
+
+        // override object.GetHashCode
+        public override int GetHashCode()
+        {
+            return HashCode.Combine(VertexPosition, UV, Normal);
+        }
+
+        public override readonly string ToString() => (VertexPosition, UV, Normal).ToString();
 
         public readonly void Deconstruct(out Vector3 vertexPos, out Vector2 uv, out Vector3 normal)
         {
@@ -78,13 +106,7 @@ public static class MeshCut
         mesh.GetNormals(normals);
         mesh.GetUVs(0, uvs);
 
-        VData GetVData(int index) =>
-            new()
-            {
-                VertexPosition = verts[index],
-                UV = uvs[index],
-                Normal = normals[index]
-            };
+        VData GetVData(int index) => new(verts[index], uvs[index], normals[index]);
 
         // define a plane to make the cut RELATIVE to meshFilter
         Plane cuttingPlane = new(cutPlaneNormal, cutPositionLocal);
@@ -100,176 +122,124 @@ public static class MeshCut
 
             var submeshTris = mesh.GetTriangles(i).GroupByTripletsStrict();
 
-            foreach (var tri in submeshTris)
+            foreach (var (a, b, c) in submeshTris)
             {
-                ArraySegment<VData> triVData = new(ArrayPool<VData>.Shared.Rent(3), 0, 3);
+                using var _tb = ArrayPool<VData>.Shared.GetPooledSegment(3, out var triBuffer);
 
-                triVData[0] = GetVData(tri.a);
-                triVData[1] = GetVData(tri.b);
-                triVData[2] = GetVData(tri.c);
+                triBuffer[0] = GetVData(a);
+                triBuffer[1] = GetVData(b);
+                triBuffer[2] = GetVData(c);
 
-                var a = triVData[0];
-                var b = triVData[1];
-                var c = triVData[2];
+                var sides = triBuffer.Select(x => cuttingPlane.GetSide(x.VertexPosition)).ToArray();
 
-                if (triVData.All(uvx => cuttingPlane.GetSide(uvx.VertexPosition) == true))
+                if (sides.All(x => x == true))
                 {
-                    subPosTris.AddRange(triVData);
+                    subPosTris.AddRange(triBuffer);
                 }
-                else if (triVData.All(uvx => cuttingPlane.GetSide(uvx.VertexPosition) == false))
+                else if (sides.All(x => x == false))
                 {
-                    subNegTris.AddRange(triVData);
+                    subNegTris.AddRange(triBuffer);
                 }
                 else
                 {
-                    Debug.Log(
-                        $"triUVerts: {string.Join(", ", triVData.Select(t => $"point: {t.VertexPosition}, side: {cuttingPlane.GetSide(t.VertexPosition)}"))}"
-                    );
-                    // inbetween tris to be split by the cut
-                    // todo: case where point/s lie on line
-                    // three groups -- triangle, trapezium tri a, trapezium tri b
+                    // sort into X, Y1, Y2
+                    // then just do the plane raycast from X to Y1/Y2 in order to keep intersect order I1 I2 matching Y1 Y2
+                    // then we can simply go (X I1 I2), (Y1 I1 I2), (Y2 Y1 I2)
+                    // Debug.Log(
+                    //     $"triUVerts: {string.Join(", ", triBuffer.Select(t => $"point: {t.VertexPosition}, side: {cuttingPlane.GetSide(t.VertexPosition)}"))}"
+                    // );
 
-                    var triSegmentsArr = ArrayPool<(VData pointA, VData pointB)>.Shared.Rent(3);
-                    triSegmentsArr[0] = (a, b);
-                    triSegmentsArr[1] = (b, c);
-                    triSegmentsArr[2] = (c, a);
+                    // x = tri point that makes the 1-triangle group
+                    // y1 & y2 = other two tri points that lie on the other side of the plane, that make two additional tris with the two intersects from them to x
+                    VData x,
+                        y1,
+                        y2;
 
-                    using var _i = ListPool<(int segmentIndex, VData vData)>.Get(
-                        out var intersections
-                    );
+                    // positive/negative sides
+                    using var _pd = DictionaryPool<int, VData>.Get(out var processingDict);
 
-                    // find triangle group by seeing which two segments the plane intersects
-                    for (int y = 0; y < triSegmentsArr.Length; y++)
+                    int smallerSign = 0;
+
+                    // sorting vert data into pos/negative sides. so if 2 pos 1 neg, it will look like {-1: x, 1: y1, 2: y2}
+                    for (int j = 0; j < 3; j++)
                     {
-                        var ((aVert, aUv, aN), (bVert, bUv, bN)) = triSegmentsArr[y];
+                        int sign = sides[j] ? 1 : -1;
+                        VData vertData = triBuffer[j];
 
-                        if (cuttingPlane.IntersectsSegment(aVert, bVert, out var intersectPoint))
+                        if (!processingDict.TryAdd(sign, vertData))
                         {
-                            // calculate UV between pointA and pointB
-                            // for perf, use dot product to give us normalised distance ratio between A->B and A->intersectPoint
-                            var normDistRatio =
-                                Vector3.Dot(bVert - aVert, intersectPoint - aVert)
-                                / (bVert - aVert).sqrMagnitude;
-                            var interpolatedUV = Vector2.Lerp(aUv, bUv, normDistRatio);
-                            var interpolatedNormal = Vector3.Lerp(aN, bN, normDistRatio);
-                            intersections.Add(
-                                (
-                                    y,
-                                    new()
-                                    {
-                                        VertexPosition = intersectPoint,
-                                        UV = interpolatedUV,
-                                        Normal = interpolatedNormal
-                                    }
-                                )
-                            );
-                        }
-                        else
-                        {
-                            Debug.LogError("cutting plane does not intersect segment!");
+                            smallerSign = sign * -1;
+                            processingDict[sign * 2] = vertData;
                         }
                     }
 
-                    ArrayPool<(VData pointA, VData pointB)>.Shared.Return(triSegmentsArr);
+                    // smaller sign will only have 1 entry, therefore that is X
+                    x = processingDict[smallerSign];
+                    y1 = processingDict[smallerSign * -1];
+                    y2 = processingDict[smallerSign * -2];
 
-                    if (intersections.Count != 2)
+                    // now get intersects I1 and I2. I1 corresponds to the intersect point between X and Y1, same thing for I2 and X / Y2
+                    VData GetIntersect(VData y)
                     {
-                        Debug.LogError(
-                            $"invalid intersections count! expected 2. got {intersections.Count}"
-                        );
+                        var (xPos, _, _) = x;
+                        var (yPos, _, _) = y;
 
-                        LastCutInfo.Errored = true;
-                        for (int j = 0; j < triVData.Count; j++)
+                        Vector3 xToY = yPos - xPos;
+
+                        Ray ray = new(xPos, xToY);
+
+                        if (!cuttingPlane.Raycast(ray, out float dist))
                         {
-                            LastCutInfo.CutTri[j] = triVData[j].VertexPosition;
-                            LastCutInfo.TriSides[j] = cuttingPlane.GetSide(
-                                triVData[j].VertexPosition
-                            );
+                            Debug.LogError($"intersect not found from {xPos} to {yPos}");
+                            return default;
                         }
+
+                        var intersectPos = ray.GetPoint(dist);
+
+                        // get normalised dist ratio of the intersect vs total distance from X to y
+                        var normDistRatio =
+                            Vector3.Dot(xToY, intersectPos - xPos) / xToY.sqrMagnitude;
+
+                        var interpolatedUV = Vector2.Lerp(x.UV, y.UV, normDistRatio);
+                        var interpolatedNormal = Vector3.Lerp(x.Normal, y.Normal, normDistRatio);
+
+                        return new(intersectPos, interpolatedUV, interpolatedNormal);
                     }
 
-                    // the tri group is the one point shared by the two segments plus the two intersection points.
-                    var ((aStart, _, _), (aEnd, _, _)) = triSegmentsArr[
-                        intersections[0].segmentIndex
-                    ];
-                    var ((bStart, _, _), (bEnd, _, _)) = triSegmentsArr[
-                        intersections[1].segmentIndex
-                    ];
+                    var i1 = GetIntersect(y1);
+                    var i2 = GetIntersect(y2);
 
-                    using var _seg = ListPool<Vector3>.Get(out var segABPoints);
-                    segABPoints.Add(aStart);
-                    segABPoints.Add(aEnd);
-                    segABPoints.Add(bStart);
-                    segABPoints.Add(bEnd);
+                    // now we're ready to form our triangles. take the original cross product to check for winding order later
+                    var originalTriCross = GetTriNormal(triBuffer);
 
-                    // find the shared point
-                    var sharedPoint = segABPoints.FindDuplicate();
-                    var firstUVert = triVData.First(uvx => uvx.VertexPosition == sharedPoint);
+                    // top triangle group of the cut: x,i2,i1
+                    triBuffer[0] = x;
+                    triBuffer[1] = i2;
+                    triBuffer[2] = i1;
 
-                    ArraySegment<VData> currentTriBuffer =
-                        new(ArrayPool<VData>.Shared.Rent(3), 0, 3);
+                    if (!EnsureCrossMatch(triBuffer, originalTriCross))
+                        Debug.LogError("crossMatch failed");
 
-                    // shared uvert point from original tri
-                    currentTriBuffer[0] = firstUVert;
-                    // two intersect uverts
-                    currentTriBuffer[1] = intersections[0].vData;
-                    currentTriBuffer[2] = intersections[1].vData;
+                    (smallerSign > 0 ? subPosTris : subNegTris).AddRange(triBuffer);
 
-                    // order in clockwise winding
-                    // use cross product to determine winding direction matches original tri
-                    var originalTriCross = GetTriNormal(
-                        a.VertexPosition,
-                        b.VertexPosition,
-                        c.VertexPosition
-                    );
+                    // bottom two
+                    var botTrisDest = smallerSign > 0 ? subNegTris : subPosTris;
 
-                    if (!EnsureCrossMatch(currentTriBuffer, originalTriCross))
-                    {
-                        cuttingPlane = DebugCrossMatch(cuttingPlane, triVData, currentTriBuffer);
-                        break;
-                    }
+                    // first bot tri: y1, i1, i2
+                    triBuffer[0] = y1;
+                    triBuffer[1] = i1;
+                    triBuffer[2] = i2;
+                    if (!EnsureCrossMatch(triBuffer, originalTriCross))
+                        Debug.LogError("crossMatch failed");
+                    botTrisDest.AddRange(triBuffer);
 
-                    var topTriIsPositive = cuttingPlane.GetSide(sharedPoint);
-                    (topTriIsPositive ? subPosTris : subNegTris).AddRange(currentTriBuffer);
-
-                    // now the two extra tris from the trapezoid
-                    // tri 1: the two intersects stay the same, but use another point from the original tri
-                    var secondUVert = triVData.SkipWhile(x => x == firstUVert).First();
-                    currentTriBuffer[0] = secondUVert;
-
-                    if (!EnsureCrossMatch(currentTriBuffer, originalTriCross))
-                    {
-                        cuttingPlane = DebugCrossMatch(cuttingPlane, triVData, currentTriBuffer);
-                        break;
-                    }
-
-                    // these tris are on the other side compared to the first tri
-                    (topTriIsPositive ? subNegTris : subPosTris).AddRange(currentTriBuffer);
-
-                    // tri 2: use the remaining original point, get the intersect this links to, plus the point used before
-                    var thirdUVert = triVData
-                        .Where(uvx => uvx != firstUVert && uvx != secondUVert)
-                        .Single();
-
-                    // get the segment between this and uvx1
-                    var intersectPoint3 = intersections.Find(i =>
-                    {
-                        var (pointA, pointB) = triSegmentsArr[i.segmentIndex];
-                        return (pointA == thirdUVert && pointB == firstUVert)
-                            || (pointA == firstUVert && pointB == thirdUVert);
-                    });
-
-                    currentTriBuffer[0] = thirdUVert;
-                    currentTriBuffer[1] = intersectPoint3.vData;
-                    currentTriBuffer[2] = secondUVert;
-
-                    if (!EnsureCrossMatch(currentTriBuffer, originalTriCross))
-                    {
-                        cuttingPlane = DebugCrossMatch(cuttingPlane, triVData, currentTriBuffer);
-                        break;
-                    }
-
-                    (topTriIsPositive ? subNegTris : subPosTris).AddRange(currentTriBuffer);
+                    // second bot tri: y2, y1, i2
+                    triBuffer[0] = y2;
+                    triBuffer[1] = y1;
+                    triBuffer[2] = i2;
+                    if (!EnsureCrossMatch(triBuffer, originalTriCross))
+                        Debug.LogError("crossMatch failed");
+                    botTrisDest.AddRange(triBuffer);
                 }
             }
 
@@ -279,66 +249,88 @@ public static class MeshCut
         // todo fill
 
         // create two meshes now with the positive and negative side vertices
-        Debug.Log($"pos count: {positiveUVertTris.Count}, neg count: {negativeUVertTris.Count}");
+        Debug.Log(
+            $"original count: {mesh.triangles.Length}, pos count: {positiveUVertTris[0].Count}, neg count: {negativeUVertTris[0].Count}, total: {positiveUVertTris[0].Count + negativeUVertTris[0].Count}"
+        );
+
+        Mesh GetMesh(List<List<VData>> vData)
+        {
+            Mesh mesh = new();
+            using var _v = ListPool<Vector3>.Get(out var vertices);
+            using var _uv = ListPool<Vector2>.Get(out var uvs);
+            using var _n = ListPool<Vector3>.Get(out var normals);
+            // use a dict to track already set vertices
+            using var _d = DictionaryPool<VData, int>.Get(out var vDataIndices);
+
+            using var _tbs = ListPool<int[]>.Get(out var trisBySubmesh);
+
+            for (int i = 0; i < vData.Count; i++)
+            {
+                List<VData> submesh = vData[i];
+                var submeshTris = new int[submesh.Count];
+                for (int j = 0; j < submesh.Count; j++)
+                {
+                    VData vd = submesh[j];
+                    if (!vDataIndices.TryGetValue(vd, out var index))
+                    {
+                        // if we haven't added a vert yet, do it now
+                        vertices.Add(vd.VertexPosition);
+                        uvs.Add(vd.UV);
+                        normals.Add(vd.Normal);
+
+                        // index is the last vert
+                        index = vertices.Count - 1;
+                        vDataIndices[vd] = index;
+                    }
+
+                    submeshTris[j] = index;
+                }
+                trisBySubmesh.Add(submeshTris);
+            }
+
+            mesh.SetVertices(vertices);
+            mesh.SetUVs(0, uvs);
+            mesh.SetNormals(normals);
+
+            for (int i = 0; i < trisBySubmesh.Count; i++)
+            {
+                int[] tris = trisBySubmesh[i];
+                mesh.SetTriangles(tris, i);
+            }
+
+            return mesh;
+        }
 
         // positive side
-        Mesh posSideMesh = new();
-        var flattenedUVertsPos = positiveUVertTris.SelectMany(x => x).ToList();
-        posSideMesh.SetVertices(flattenedUVertsPos.Select(uvert => uvert.VertexPosition).ToArray());
-        posSideMesh.SetUVs(0, flattenedUVertsPos.Select(uvert => uvert.UV).ToArray());
+        Mesh posSideMesh = GetMesh(positiveUVertTris);
 
-        // set tris for positive side
-        for (int i = 0; i < positiveUVertTris.Count; i++)
-        {
-            var thisSubmeshUVerts = positiveUVertTris[i];
-            // convert uverts to indices
-            var thisSubmeshTris = thisSubmeshUVerts
-                .Select(uvert => flattenedUVertsPos.FindIndex(cuv => cuv == uvert))
-                .ToArray();
-            posSideMesh.SetTriangles(thisSubmeshTris, i);
-        }
-        posSideMesh.RecalculateNormals();
+        if (posSideMesh.normals.Any(n => n == Vector3.zero))
+            Debug.LogError("zero!");
+        //posSideMesh.Optimize();
+        //posSideMesh.RecalculateNormals();
+        if (posSideMesh.normals.Any(n => n == Vector3.zero))
+            Debug.LogError("zero postRecalc!");
 
         // negative side
-        Mesh negSideMesh = new();
-        var flattenedUVertsNeg = negativeUVertTris.SelectMany(x => x).ToList();
-        negSideMesh.SetVertices(flattenedUVertsNeg.Select(uvert => uvert.VertexPosition).ToArray());
-        negSideMesh.SetUVs(0, flattenedUVertsNeg.Select(uvert => uvert.UV).ToArray());
+        Mesh negSideMesh = GetMesh(negativeUVertTris);
 
-        // set tris for negative side
-        for (int i = 0; i < negativeUVertTris.Count; i++)
-        {
-            var thisSubmeshUVerts = negativeUVertTris[i];
-            // convert uverts to indices
-            var thisSubmeshTris = thisSubmeshUVerts
-                .Select(uvert => flattenedUVertsNeg.FindIndex(cuv => cuv == uvert))
-                .ToArray();
-            negSideMesh.SetTriangles(thisSubmeshTris, i);
-        }
-        negSideMesh.RecalculateNormals();
-
+        if (negSideMesh.normals.Any(n => n == Vector3.zero))
+            Debug.LogError("zero!");
+        //negSideMesh.Optimize();
+        //negSideMesh.RecalculateNormals();
+        if (negSideMesh.normals.Any(n => n == Vector3.zero))
+            Debug.LogError("zero postRecalc!");
         return (posSideMesh, negSideMesh);
-
-        static Plane DebugCrossMatch(
-            Plane cuttingPlane,
-            ArraySegment<VData> triUVerts,
-            ArraySegment<VData> currentTriBuffer
-        )
-        {
-            LastCutInfo.Errored = true;
-            for (int j = 0; j < triUVerts.Count; j++)
-            {
-                LastCutInfo.CutTri[j] = triUVerts[j].VertexPosition;
-                LastCutInfo.TriSides[j] = cuttingPlane.GetSide(triUVerts[j].VertexPosition);
-            }
-            LastCutInfo.SubCutTri.AddRange(currentTriBuffer.Select(uvx => uvx.VertexPosition));
-
-            return cuttingPlane;
-        }
     }
 
     public static Vector3 GetTriNormal(Vector3 a, Vector3 b, Vector3 c) =>
         Vector3.Cross(b - a, c - a);
+
+    public static Vector3 GetTriNormal(IList<VData> tri) =>
+        Vector3.Cross(
+            tri[1].VertexPosition - tri[0].VertexPosition,
+            tri[2].VertexPosition - tri[0].VertexPosition
+        );
 
     public static bool EnsureCrossMatch(IList<VData> uverts, Vector3 crossVec)
     {
@@ -346,11 +338,7 @@ public static class MeshCut
         var b = uverts[1];
         var c = uverts[2];
 
-        var firstTryCross = GetTriNormal(
-            uverts[0].VertexPosition,
-            uverts[1].VertexPosition,
-            uverts[2].VertexPosition
-        );
+        var firstTryCross = GetTriNormal(uverts);
         if (Vector3.Dot(firstTryCross, crossVec) > 0)
         {
             return true;
@@ -359,11 +347,7 @@ public static class MeshCut
         uverts[1] = c;
         uverts[2] = b;
 
-        var secondTryCross = GetTriNormal(
-            uverts[0].VertexPosition,
-            uverts[1].VertexPosition,
-            uverts[2].VertexPosition
-        );
+        var secondTryCross = GetTriNormal(uverts);
         if (Vector3.Dot(secondTryCross, crossVec) < 0)
         {
             Debug.LogError(
