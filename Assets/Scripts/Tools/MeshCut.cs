@@ -77,14 +77,12 @@ public static class MeshCut
         public bool Equals(VData other) => this == other;
 
         // override object.GetHashCode
-        public override int GetHashCode()
-        {
-            return HashCode.Combine(
+        public override int GetHashCode() =>
+            HashCode.Combine(
                 Helpers.Quantize(VertexPosition),
                 Helpers.Quantize(UV),
                 Helpers.Quantize(Normal)
             );
-        }
 
         public override readonly string ToString() => (VertexPosition, UV, Normal).ToString();
 
@@ -133,7 +131,6 @@ public static class MeshCut
             var submeshTris = mesh.GetTriangles(i).GroupByTripletsStrict();
 
             using var _tb = ArrayPool<VData>.Shared.GetPooledSegment(3, out var triBuffer);
-            LinkedList<VData> processedEdgeVerts = new();
             foreach (var (a, b, c) in submeshTris)
             {
                 triBuffer[0] = GetVData(a);
@@ -155,203 +152,22 @@ public static class MeshCut
                 {
                     subNegTris.AddRange(triBuffer);
                 }
-                // todo edge case: one pos, one neg, one sits on plane
-                // this tri can be split into two tris instead of 3
-                // todo edge case: two sits on plane
-                // this tri can be sorted into the side that the non-intersect vert is on
-                // todo edge case: 3 sits on plane
-                // may as well default to positive side or something.
-                // todo if verts sit on the plane, this may impact our fill-step later
                 else
                 {
-                    // when you have a plane intersecting a tri, it will be one vert on one side and two verts on the other side, unless some verts sit exactly on the plane
-                    // X: single point on one side of the plane
-                    // Y1 & Y2: the two points on the other side of the plane.
-                    // then plane raycast from X to Y1/Y2 to get intersects I1 & I2, corresponding to Y1 & Y2
-                    // then we can always define our generated tris by (X I1 I2), (Y1 I1 I2), (Y2 Y1 I2)
-
-                    // Debug.Log(
-                    //     $"triUVerts: {string.Join(", ", triBuffer.Select(t => $"point: {t.VertexPosition}, side: {cuttingPlane.GetSide(t.VertexPosition)}"))}"
-                    // );
-
-                    VData x,
-                        y1,
-                        y2;
-
-                    // positive/negative sides
-                    using var _pd = DictionaryPool<int, VData>.Get(out var processingDict);
-
-                    int smallerSign = 0;
-
-                    // sorting vert data into pos/negative sides. so if 2 pos 1 neg, it will look like {-1: x, 1: y1, 2: y2}
-                    for (int j = 0; j < 3; j++)
-                    {
-                        int sign = sides[j] ? 1 : -1;
-                        VData vertData = triBuffer[j];
-
-                        if (!processingDict.TryAdd(sign, vertData))
-                        {
-                            smallerSign = sign * -1;
-                            processingDict[sign * 2] = vertData;
-                        }
-                    }
-
-                    // smaller sign will only have 1 entry, therefore that is X
-                    x = processingDict[smallerSign];
-                    y1 = processingDict[smallerSign * -1];
-                    y2 = processingDict[smallerSign * -2];
-
-                    // now get intersects I1 and I2. I1 corresponds to the intersect point between X and Y1, same thing for I2 and X / Y2
-                    VData GetIntersect(VData y)
-                    {
-                        var (xPos, _, _) = x;
-                        var (yPos, _, _) = y;
-
-                        Vector3 xToY = yPos - xPos;
-
-                        Ray ray = new(xPos, xToY);
-
-                        if (!cuttingPlane.Raycast(ray, out float dist))
-                        {
-                            Debug.LogError($"intersect not found from {xPos} to {yPos}");
-                            return default;
-                        }
-
-                        var intersectPos = ray.GetPoint(dist);
-
-                        // get normalised dist ratio of the intersect vs total distance from X to y
-                        var normDistRatio =
-                            Vector3.Dot(xToY, intersectPos - xPos) / xToY.sqrMagnitude;
-
-                        var interpolatedUV = Vector2.Lerp(x.UV, y.UV, normDistRatio);
-                        var interpolatedNormal = Vector3.Lerp(x.Normal, y.Normal, normDistRatio);
-
-                        return new(intersectPos, interpolatedUV, interpolatedNormal);
-                    }
-
-                    var i1 = GetIntersect(y1);
-                    var i2 = GetIntersect(y2);
-
-                    // now we're ready to form our triangles. take the original cross product to check for winding order later
-                    var originalTriCross = GetTriNormal(triBuffer);
-
-                    // top triangle group of the cut: x,i2,i1
-                    triBuffer[0] = x;
-                    triBuffer[1] = i2;
-                    triBuffer[2] = i1;
-
-                    if (!EnsureCrossMatch(triBuffer, originalTriCross))
-                        Debug.LogError("crossMatch failed");
-
-                    (smallerSign > 0 ? subPosTris : subNegTris).AddRange(triBuffer);
-
-                    // bottom two
-                    var botTrisDest = smallerSign > 0 ? subNegTris : subPosTris;
-
-                    // first bot tri: y1, i1, i2
-                    triBuffer[0] = y1;
-                    triBuffer[1] = i1;
-                    triBuffer[2] = i2;
-                    if (!EnsureCrossMatch(triBuffer, originalTriCross))
-                        Debug.LogError("crossMatch failed");
-                    botTrisDest.AddRange(triBuffer);
-
-                    // second bot tri: y2, y1, i2
-                    triBuffer[0] = y2;
-                    triBuffer[1] = y1;
-                    triBuffer[2] = i2;
-                    if (!EnsureCrossMatch(triBuffer, originalTriCross))
-                        Debug.LogError("crossMatch failed");
-                    botTrisDest.AddRange(triBuffer);
-
-                    cutEdgeVerts.Add(i1);
-                    cutEdgeVerts.Add(i2);
+                    CutTri(cuttingPlane, subPosTris, subNegTris, cutEdgeVerts, triBuffer, sides);
                 }
             }
 
             if (cutEdgeVerts.Any())
             {
-                // process the fill for the open face left by the cut
-                // todo if the cut would create multiple open faces, need to change algorithm and potentially create more than 2 meshes
-                var midPoint =
-                    cutEdgeVerts.Aggregate(Vector3.zero, (accum, v) => accum += v.VertexPosition)
-                    / cutEdgeVerts.Count;
-
-                processedEdgeVerts.Clear();
-                var first = processedEdgeVerts.AddFirst(cutEdgeVerts[0]);
-                var second = processedEdgeVerts.AddLast(cutEdgeVerts[1]);
-
-                using var _pp = HashSetPool<(VData, VData)>.Get(out var processedPairs);
-
-                bool anyLink = false;
-
-                void CheckPair(VData v1, VData v2)
-                {
-                    if (processedPairs.Contains((v1, v2)))
-                        return;
-
-                    if (processedEdgeVerts.First.Value.VertexPosition == v1.VertexPosition)
-                    {
-                        processedEdgeVerts.AddFirst(v2);
-                        processedPairs.Add((v2, v1));
-                        anyLink = true;
-                    }
-                    else if (processedEdgeVerts.Last.Value.VertexPosition == v1.VertexPosition)
-                    {
-                        processedEdgeVerts.AddLast(v2);
-                        processedPairs.Add((v1, v2));
-                        anyLink = true;
-                    }
-                }
-                do
-                {
-                    anyLink = false;
-                    // evaluate pairs so that our edge vertices are ordered
-                    for (int j = 2; j < cutEdgeVerts.Count; j += 2)
-                    {
-                        var a = cutEdgeVerts[j];
-                        var b = cutEdgeVerts[j + 1];
-
-                        CheckPair(a, b);
-                        CheckPair(b, a);
-                    }
-                } while (anyLink);
-
-                // for each element in vData, create tri with next element and midpoint
-                for (var node = processedEdgeVerts.First; node != null; node = node.Next)
-                {
-                    VData v1 = node.Value;
-                    VData v2 = (node.Next ?? processedEdgeVerts.First).Value;
-
-                    Vector2 uv = new(0.5f, 0.5f);
-
-                    triBuffer[0] = new(v1.VertexPosition, uv, -cutPlaneNormal);
-                    triBuffer[1] = new(midPoint, uv, -cutPlaneNormal);
-                    triBuffer[2] = new(v2.VertexPosition, uv, -cutPlaneNormal);
-                    EnsureCrossMatch(triBuffer, -cutPlaneNormal);
-
-                    subPosTris.AddRange(triBuffer);
-
-                    // reverse plane
-                    triBuffer[0] = new(v1.VertexPosition, uv, cutPlaneNormal);
-                    triBuffer[1] = new(midPoint, uv, cutPlaneNormal);
-                    triBuffer[2] = new(v2.VertexPosition, uv, cutPlaneNormal);
-                    EnsureCrossMatch(triBuffer, cutPlaneNormal);
-
-                    subNegTris.AddRange(triBuffer);
-                }
+                FillCutHole(cutPlaneNormal, subPosTris, subNegTris, cutEdgeVerts, triBuffer);
             }
 
             positiveUVertTris.Add(subPosTris);
             negativeUVertTris.Add(subNegTris);
         }
-        // todo fill
 
         // create two meshes now with the positive and negative side vertices
-        // Debug.Log(
-        //     $"original count: {mesh.triangles.Length}, pos count: {positiveUVertTris[0].Count}, neg count: {negativeUVertTris[0].Count}, total: {positiveUVertTris[0].Count + negativeUVertTris[0].Count}"
-        // );
-
         Mesh GetMesh(List<List<VData>> vData)
         {
             Mesh mesh = new();
@@ -407,6 +223,204 @@ public static class MeshCut
         Mesh negSideMesh = GetMesh(negativeUVertTris);
 
         return (posSideMesh, negSideMesh);
+    }
+
+    private static void FillCutHole(
+        Vector3 cutPlaneNormal,
+        List<VData> subPosTris,
+        List<VData> subNegTris,
+        List<VData> cutEdgeVerts,
+        ArraySegment<VData> triBuffer
+    )
+    {
+        // could pool this. writing a new pool manager for just this one datatype is not a prio here
+        LinkedList<VData> processedEdgeVerts = new();
+
+        // process the fill for the open face left by the cut
+        // todo if the cut would create multiple open faces, need to change algorithm and potentially create more than 2 meshes
+        var midPoint =
+            cutEdgeVerts.Aggregate(Vector3.zero, (accum, v) => accum += v.VertexPosition)
+            / cutEdgeVerts.Count;
+
+        processedEdgeVerts.Clear();
+        var first = processedEdgeVerts.AddFirst(cutEdgeVerts[0]);
+        var second = processedEdgeVerts.AddLast(cutEdgeVerts[1]);
+        using var _pp = HashSetPool<(VData, VData)>.Get(out var processedPairs);
+
+        bool anyLink = false;
+
+        void CheckPair(VData v1, VData v2)
+        {
+            if (processedPairs.Contains((v1, v2)))
+                return;
+
+            if (processedEdgeVerts.First.Value.VertexPosition == v1.VertexPosition)
+            {
+                processedEdgeVerts.AddFirst(v2);
+                processedPairs.Add((v2, v1));
+                anyLink = true;
+            }
+            else if (processedEdgeVerts.Last.Value.VertexPosition == v1.VertexPosition)
+            {
+                processedEdgeVerts.AddLast(v2);
+                processedPairs.Add((v1, v2));
+                anyLink = true;
+            }
+        }
+
+        do
+        {
+            anyLink = false;
+            // evaluate pairs so that our edge vertices are ordered so that [a,b, d,c, b,c, e,d] becomes [a,b,c,d,e]
+            for (int j = 2; j < cutEdgeVerts.Count; j += 2)
+            {
+                var a = cutEdgeVerts[j];
+                var b = cutEdgeVerts[j + 1];
+
+                CheckPair(a, b);
+                CheckPair(b, a);
+            }
+        } while (anyLink);
+
+        // for each element in vData, create tri with next element and midpoint
+        for (var node = processedEdgeVerts.First; node != null; node = node.Next)
+        {
+            VData v1 = node.Value;
+            VData v2 = (node.Next ?? processedEdgeVerts.First).Value;
+
+            Vector2 uv = new(0.5f, 0.5f);
+
+            triBuffer[0] = new(v1.VertexPosition, uv, -cutPlaneNormal);
+            triBuffer[1] = new(midPoint, uv, -cutPlaneNormal);
+            triBuffer[2] = new(v2.VertexPosition, uv, -cutPlaneNormal);
+            EnsureCrossMatch(triBuffer, -cutPlaneNormal);
+
+            subPosTris.AddRange(triBuffer);
+
+            // reverse plane
+            triBuffer[0] = new(v1.VertexPosition, uv, cutPlaneNormal);
+            triBuffer[1] = new(midPoint, uv, cutPlaneNormal);
+            triBuffer[2] = new(v2.VertexPosition, uv, cutPlaneNormal);
+            EnsureCrossMatch(triBuffer, cutPlaneNormal);
+
+            subNegTris.AddRange(triBuffer);
+        }
+    }
+
+    private static void CutTri(
+        Plane cuttingPlane,
+        List<VData> subPosTris,
+        List<VData> subNegTris,
+        List<VData> cutEdgeVerts,
+        ArraySegment<VData> triBuffer,
+        ArraySegment<bool> sides
+    )
+    {
+        // todo edge case: one pos, one neg, one sits on plane
+        // this tri can be split into two tris instead of 3
+        // todo edge case: two sits on plane
+        // this tri can be sorted into the side that the non-intersect vert is on
+        // todo edge case: 3 sits on plane
+        // may as well default to positive side or something.
+        // todo if verts sit on the plane, this may impact our fill-step later
+
+        // when you have a plane intersecting a tri, it will be one vert on one side and two verts on the other side, unless some verts sit exactly on the plane
+        // X: single point on one side of the plane
+        // Y1 & Y2: the two points on the other side of the plane.
+        // then plane raycast from X to Y1/Y2 to get intersects I1 & I2, corresponding to Y1 & Y2
+        // then we can always define our generated tris by (X I1 I2), (Y1 I1 I2), (Y2 Y1 I2)
+
+        VData x,
+            y1,
+            y2;
+
+        // positive/negative sides
+        using var _pd = DictionaryPool<int, VData>.Get(out var processingDict);
+
+        int smallerSign = 0;
+
+        // sorting vert data into pos/negative sides. so if 2 pos 1 neg, it will look like {-1: x, 1: y1, 2: y2}
+        for (int j = 0; j < 3; j++)
+        {
+            int sign = sides[j] ? 1 : -1;
+            VData vertData = triBuffer[j];
+
+            if (!processingDict.TryAdd(sign, vertData))
+            {
+                smallerSign = sign * -1;
+                processingDict[sign * 2] = vertData;
+            }
+        }
+
+        // smaller sign will only have 1 entry, therefore that is X
+        x = processingDict[smallerSign];
+        y1 = processingDict[smallerSign * -1];
+        y2 = processingDict[smallerSign * -2];
+
+        // now get intersects I1 and I2. I1 corresponds to the intersect point between X and Y1, same thing for I2 and X / Y2
+        VData GetIntersect(VData y)
+        {
+            var (xPos, _, _) = x;
+            var (yPos, _, _) = y;
+
+            Vector3 xToY = yPos - xPos;
+
+            Ray ray = new(xPos, xToY);
+
+            if (!cuttingPlane.Raycast(ray, out float dist))
+            {
+                Debug.LogError($"intersect not found from {xPos} to {yPos}");
+                return default;
+            }
+
+            var intersectPos = ray.GetPoint(dist);
+
+            // get normalised dist ratio of the intersect vs total distance from X to y
+            var normDistRatio = Vector3.Dot(xToY, intersectPos - xPos) / xToY.sqrMagnitude;
+
+            var interpolatedUV = Vector2.Lerp(x.UV, y.UV, normDistRatio);
+            var interpolatedNormal = Vector3.Lerp(x.Normal, y.Normal, normDistRatio);
+
+            return new(intersectPos, interpolatedUV, interpolatedNormal);
+        }
+
+        var i1 = GetIntersect(y1);
+        var i2 = GetIntersect(y2);
+
+        // now we're ready to form our triangles. take the original cross product to check for winding order later
+        var originalTriCross = GetTriNormal(triBuffer);
+
+        // top triangle group of the cut: x,i2,i1
+        triBuffer[0] = x;
+        triBuffer[1] = i2;
+        triBuffer[2] = i1;
+
+        if (!EnsureCrossMatch(triBuffer, originalTriCross))
+            Debug.LogError("crossMatch failed");
+
+        (smallerSign > 0 ? subPosTris : subNegTris).AddRange(triBuffer);
+
+        // bottom two
+        var botTrisDest = smallerSign > 0 ? subNegTris : subPosTris;
+
+        // first bot tri: y1, i1, i2
+        triBuffer[0] = y1;
+        triBuffer[1] = i1;
+        triBuffer[2] = i2;
+        if (!EnsureCrossMatch(triBuffer, originalTriCross))
+            Debug.LogError("crossMatch failed");
+        botTrisDest.AddRange(triBuffer);
+
+        // second bot tri: y2, y1, i2
+        triBuffer[0] = y2;
+        triBuffer[1] = y1;
+        triBuffer[2] = i2;
+        if (!EnsureCrossMatch(triBuffer, originalTriCross))
+            Debug.LogError("crossMatch failed");
+        botTrisDest.AddRange(triBuffer);
+
+        cutEdgeVerts.Add(i1);
+        cutEdgeVerts.Add(i2);
     }
 
     public static Vector3 GetTriNormal(Vector3 a, Vector3 b, Vector3 c) =>
