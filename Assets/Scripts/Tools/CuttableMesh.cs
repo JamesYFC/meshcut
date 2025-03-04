@@ -1,3 +1,4 @@
+using UnityEditor;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
@@ -79,56 +80,69 @@ public class CuttableMesh : MonoBehaviour
 
     void OnDrawGizmos()
     {
-        if (MeshCut.LastCutInfo.Errored)
+        if (!MeshCut.LastCutInfo.Errored)
         {
-            var cutInfo = MeshCut.LastCutInfo;
-            var cutPlane = cutInfo.CuttingPlane;
-            var cutTri = cutInfo.CutTri;
-            var cutSide = cutInfo.TriSides;
-            var subCutTri = cutInfo.SubCutTri;
+            return;
+        }
 
-            Debug.Log(
-                $"meshCut errored with plane norm: {cutPlane.normal} dist: {cutPlane.distance} | tri {string.Join(", ", cutTri)}"
-            );
+        var cutInfo = MeshCut.LastCutInfo;
+        var cutPlane = cutInfo.CuttingPlane;
+        var cutTri = cutInfo.CutTri;
+        var cutSide = cutInfo.TriSides;
+        var subCutTri = cutInfo.SubCutTri;
 
-            // draw plane
-            DrawPlane(cutInfo.CuttingPlane.normal, cutInfo.CuttingPlane.distance, 1);
+        Debug.Log(
+            $"meshCut errored with plane norm: {cutPlane.normal} dist: {cutPlane.distance} | tri {string.Join(", ", cutTri)}"
+        );
 
-            // draw tri
-            Gizmos.color = Color.cyan;
-            Gizmos.DrawLine(cutTri[0], cutTri[1]);
-            Gizmos.DrawLine(cutTri[1], cutTri[2]);
-            Gizmos.DrawLine(cutTri[2], cutTri[0]);
-            // draw verts above/below
-            // for (int i = 0; i < lastCutTri.Length; i++)
-            // {
-            //     Gizmos.color = lastCutSide[i] ? Color.green : Color.red;
-            //     Gizmos.DrawSphere(lastCutTri[i], .01f);
-            // }
-            // draw sub-tris
-            foreach (var v in cutInfo.SubCutTri.GroupByTripletsStrict())
+        // draw plane
+        DrawPlane(cutInfo.CuttingPlane.normal, cutInfo.CuttingPlane.distance, 1);
+
+        // draw tri
+        Gizmos.color = Color.cyan;
+        Gizmos.DrawLine(cutTri[0], cutTri[1]);
+        Gizmos.DrawLine(cutTri[1], cutTri[2]);
+        Gizmos.DrawLine(cutTri[2], cutTri[0]);
+        // draw verts above/below
+        // for (int i = 0; i < lastCutTri.Length; i++)
+        // {
+        //     Gizmos.color = lastCutSide[i] ? Color.green : Color.red;
+        //     Gizmos.DrawSphere(lastCutTri[i], .01f);
+        // }
+        // draw sub-tris
+        foreach (var v in cutInfo.SubCutTri.GroupByTripletsStrict())
+        {
+            Gizmos.color = Color.magenta;
+            Gizmos.DrawLine(v.a, v.b);
+            Gizmos.DrawLine(v.b, v.c);
+            Gizmos.DrawLine(v.c, v.a);
+        }
+
+        if (cutInfo.CrossData != default)
+        {
+            var (origCr, try1Cr, try2Cr) = cutInfo.CrossData;
+
+            // draw original cross result
+            Gizmos.color = Color.white;
+            var origMidPoint = (cutTri[0] + cutTri[1] + cutTri[2]) / 3;
+            Gizmos.DrawLine(origMidPoint, origMidPoint + origCr);
+
+            // draw subcut cross result
+            Gizmos.color = Color.blue;
+            var subMidPoint = (subCutTri[0] + subCutTri[1] + subCutTri[2]) / 3;
+            Gizmos.DrawLine(subMidPoint, subMidPoint + try1Cr);
+            Gizmos.color = Color.red;
+            Gizmos.DrawLine(subMidPoint, subMidPoint + try2Cr);
+        }
+
+        if (cutInfo.CutEdgeVerts.Count > 0)
+        {
+            Gizmos.color = Color.black;
+
+            for (int i = 0; i < cutInfo.CutEdgeVerts.Count; i++)
             {
-                Gizmos.color = Color.magenta;
-                Gizmos.DrawLine(v.a, v.b);
-                Gizmos.DrawLine(v.b, v.c);
-                Gizmos.DrawLine(v.c, v.a);
-            }
-
-            if (cutInfo.CrossData != default)
-            {
-                var (origCr, try1Cr, try2Cr) = cutInfo.CrossData;
-
-                // draw original cross result
-                Gizmos.color = Color.white;
-                var origMidPoint = (cutTri[0] + cutTri[1] + cutTri[2]) / 3;
-                Gizmos.DrawLine(origMidPoint, origMidPoint + origCr);
-
-                // draw subcut cross result
-                Gizmos.color = Color.blue;
-                var subMidPoint = (subCutTri[0] + subCutTri[1] + subCutTri[2]) / 3;
-                Gizmos.DrawLine(subMidPoint, subMidPoint + try1Cr);
-                Gizmos.color = Color.red;
-                Gizmos.DrawLine(subMidPoint, subMidPoint + try2Cr);
+                MeshCut.VData v = cutInfo.CutEdgeVerts[i];
+                Handles.Label(v.VertexPosition + (i * 0.1f * Vector3.up), (i + 1).ToString());
             }
         }
     }

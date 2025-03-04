@@ -39,6 +39,25 @@ public static class Extensions
         }
     }
 
+    public static IEnumerable<(T a, T b)> GroupByPairsStrict<T>(this IEnumerable<T> source)
+        where T : struct
+    {
+        using var iterator = source.GetEnumerator();
+        while (iterator.MoveNext())
+        {
+            T first = iterator.Current;
+
+            if (!iterator.MoveNext())
+            {
+                throw new ArgumentException("enumerable is not in 2s");
+            }
+
+            T second = iterator.Current;
+
+            yield return (first, second);
+        }
+    }
+
     public static List<T> Flatten<T>(this IEnumerable<(T, T, T)> source)
     {
         List<T> result = new();
@@ -119,5 +138,17 @@ public static class Extensions
         segment = new(rentedArray, 0, length);
 
         return new(rentedArray, arrayPool);
+    }
+
+    public static bool Approximately(this Vector3 v1, Vector3 v2)
+    {
+        return (v2 - v1).sqrMagnitude
+            <= Constants.FloatingPointTolerance * Constants.FloatingPointTolerance;
+    }
+
+    public static bool Approximately(this Vector2 v1, Vector2 v2)
+    {
+        return (v2 - v1).sqrMagnitude
+            <= Constants.FloatingPointTolerance * Constants.FloatingPointTolerance;
     }
 }

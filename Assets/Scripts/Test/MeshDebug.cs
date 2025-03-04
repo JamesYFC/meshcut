@@ -49,13 +49,13 @@ public class MeshDebug : MonoBehaviour
             if (n == Vector3.zero)
                 Debug.Log("zeroN at " + i);
         }
-        Debug.Log("ALL:");
-        Debug.Log(
-            string.Join(
-                ", ",
-                vertices.Select((v, i) => i + ": " + (vertices[i], uvs[i], normals[i]) + "\n")
-            )
-        );
+        // Debug.Log("ALL:");
+        // Debug.Log(
+        //     string.Join(
+        //         ", ",
+        //         vertices.Select((v, i) => i + ": " + (vertices[i], uvs[i], normals[i]) + "\n")
+        //     )
+        // );
         // are any vdata dupes?
         var hs = new Dictionary<(Vector3, Vector2, Vector3), (int index, int count)>();
         for (int i = 0; i < vertices.Length; i++)
@@ -69,9 +69,9 @@ public class MeshDebug : MonoBehaviour
             }
         }
 
-        var dupes = hs.Where(kvp => kvp.Value.count > 1).ToList();
-        Debug.Log($"dupes({dupes.Count}): {string.Join(", ", dupes)}");
-        mesh.Optimize();
-        Debug.Log($"new dupes({dupes.Count}): {string.Join(", ", dupes)}");
+        // var dupes = hs.Where(kvp => kvp.Value.count > 1).ToList();
+        // Debug.Log($"dupes({dupes.Count}): {string.Join(", ", dupes)}");
+        // mesh.Optimize();
+        // Debug.Log($"new dupes({dupes.Count}): {string.Join(", ", dupes)}");
     }
 }
