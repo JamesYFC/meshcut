@@ -1,81 +1,20 @@
 using UnityEditor;
 using UnityEngine;
-using UnityEngine.InputSystem;
 
 [RequireComponent(typeof(MeshCollider))]
 [RequireComponent(typeof(MeshRenderer))]
 [RequireComponent(typeof(MeshFilter))]
 public class CuttableMesh : MonoBehaviour
 {
-    public Transform debugTr;
-
-    InputAction clickAction;
-    InputAction pointerPosAction;
-
-    MeshFilter meshFilter;
-    MeshRenderer meshRenderer;
-    MeshCollider meshCollider;
+    public MeshFilter meshFilter;
+    public MeshRenderer meshRenderer;
+    public MeshCollider meshCollider;
 
     void Start()
     {
-        clickAction = InputSystem.actions.FindAction("Attack");
-        pointerPosAction = InputSystem.actions.FindAction("PointerPos");
-
         meshFilter = GetComponent<MeshFilter>();
         meshRenderer = GetComponent<MeshRenderer>();
         meshCollider = GetComponent<MeshCollider>();
-    }
-
-    void Update()
-    {
-        if (clickAction.WasPerformedThisFrame())
-        {
-            var screenPoint = pointerPosAction.ReadValue<Vector2>();
-
-            // place the pointer position on the same plane as target object in terms of distance from camera viewpoint
-            Plane plane = new(Camera.main.transform.forward, transform.position);
-
-            var ray = Camera.main.ScreenPointToRay(screenPoint);
-            plane.Raycast(ray, out float dist);
-            var pointerPos = ray.GetPoint(dist);
-
-            // get local position for CutMesh
-            var relPoint = transform.InverseTransformPoint(pointerPos);
-            // for now always have direction be towards my position
-            var towardsDir = transform.InverseTransformDirection(transform.position - pointerPos);
-
-            // use cross product (right hand rule) to get cut normal for use in plane
-            var perpendicularDir = -Camera.main.transform.forward;
-            var cutNormal = Vector3.Cross(towardsDir, perpendicularDir).normalized;
-
-            if (debugTr)
-            {
-                debugTr.position = relPoint;
-                debugTr.rotation = Quaternion.LookRotation(cutNormal);
-            }
-
-            var (mesh1, mesh2) = MeshCut.CutMesh(meshFilter, relPoint, cutNormal);
-
-            meshFilter.mesh = mesh1;
-            meshCollider.sharedMesh = mesh1;
-
-            GameObject newPart =
-                new(
-                    "NewPart",
-                    typeof(MeshFilter),
-                    typeof(MeshRenderer),
-                    typeof(MeshCollider)
-                //typeof(Rigidbody)
-                );
-            var newMeshFilter = newPart.GetComponent<MeshFilter>();
-            var newMeshRenderer = newPart.GetComponent<MeshRenderer>();
-            var newMeshCollider = newPart.GetComponent<MeshCollider>();
-
-            newMeshFilter.mesh = mesh2;
-            newMeshRenderer.materials = meshRenderer.materials;
-            newMeshCollider.convex = true;
-            newMeshCollider.sharedMesh = mesh2;
-        }
     }
 
     void OnDrawGizmos()
@@ -88,7 +27,6 @@ public class CuttableMesh : MonoBehaviour
         var cutInfo = MeshCut.LastCutInfo;
         var cutPlane = cutInfo.CuttingPlane;
         var cutTri = cutInfo.CutTri;
-        var cutSide = cutInfo.TriSides;
         var subCutTri = cutInfo.SubCutTri;
 
         Debug.Log(
@@ -110,12 +48,12 @@ public class CuttableMesh : MonoBehaviour
         //     Gizmos.DrawSphere(lastCutTri[i], .01f);
         // }
         // draw sub-tris
-        foreach (var v in cutInfo.SubCutTri.GroupByTripletsStrict())
+        foreach (var (a, b, c) in cutInfo.SubCutTri.GroupByTripletsStrict())
         {
             Gizmos.color = Color.magenta;
-            Gizmos.DrawLine(v.a, v.b);
-            Gizmos.DrawLine(v.b, v.c);
-            Gizmos.DrawLine(v.c, v.a);
+            Gizmos.DrawLine(a, b);
+            Gizmos.DrawLine(b, c);
+            Gizmos.DrawLine(c, a);
         }
 
         if (cutInfo.CrossData != default)

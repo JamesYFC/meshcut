@@ -96,11 +96,7 @@ public static class MeshCut
 
     public static CutDebugInfo LastCutInfo = new();
 
-    public static (Mesh above, Mesh below) CutMesh(
-        MeshFilter meshFilter,
-        Vector3 cutPositionLocal,
-        Vector3 cutPlaneNormal
-    )
+    public static (Mesh above, Mesh below)? CutMesh(MeshFilter meshFilter, Plane cuttingPlane)
     {
         LastCutInfo.Reset();
 
@@ -115,7 +111,6 @@ public static class MeshCut
         VData GetVData(int index) => new(verts[index], uvs[index], normals[index]);
 
         // define a plane to make the cut RELATIVE to meshFilter
-        Plane cuttingPlane = new(cutPlaneNormal, cutPositionLocal);
         LastCutInfo.CuttingPlane = cuttingPlane;
 
         using var _posTris = ListPool<List<VData>>.Get(out var positiveUVertTris);
@@ -160,12 +155,15 @@ public static class MeshCut
 
             if (cutEdgeVerts.Any())
             {
-                FillCutHole(cutPlaneNormal, subPosTris, subNegTris, cutEdgeVerts, triBuffer);
+                FillCutHole(cuttingPlane.normal, subPosTris, subNegTris, cutEdgeVerts, triBuffer);
             }
 
             positiveUVertTris.Add(subPosTris);
             negativeUVertTris.Add(subNegTris);
         }
+
+        if (positiveUVertTris.All(x => x.Count == 0) || negativeUVertTris.All(x => x.Count == 0))
+            return null;
 
         // create two meshes now with the positive and negative side vertices
         Mesh GetMesh(List<List<VData>> vData)
@@ -268,6 +266,7 @@ public static class MeshCut
             }
         }
 
+        int count = 10000;
         do
         {
             anyLink = false;
@@ -279,6 +278,11 @@ public static class MeshCut
 
                 CheckPair(a, b);
                 CheckPair(b, a);
+            }
+            if (count-- < 0)
+            {
+                Debug.LogError("infinite loop detected while evaluating edge face vertices");
+                break;
             }
         } while (anyLink);
 
