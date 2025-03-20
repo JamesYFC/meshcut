@@ -52,14 +52,14 @@ public static class MeshCut
         }
 
         public static bool operator ==(VData thisVData, VData other) =>
-            thisVData.VertexPosition.Approximately(other.VertexPosition)
-            && thisVData.UV.Approximately(other.UV)
-            && thisVData.Normal.Approximately(other.Normal);
+            thisVData.VertexPosition == other.VertexPosition
+            && thisVData.UV == other.UV
+            && thisVData.Normal == other.Normal;
 
         public static bool operator !=(VData thisVData, VData other) =>
-            !thisVData.VertexPosition.Approximately(other.VertexPosition)
-            || !thisVData.UV.Approximately(other.UV)
-            || !thisVData.Normal.Approximately(other.Normal);
+            thisVData.VertexPosition != other.VertexPosition
+            || thisVData.UV != other.UV
+            || thisVData.Normal != other.Normal;
 
         // override object.Equals
         public override bool Equals(object obj)
@@ -76,13 +76,7 @@ public static class MeshCut
 
         public bool Equals(VData other) => this == other;
 
-        // override object.GetHashCode
-        public override int GetHashCode() =>
-            HashCode.Combine(
-                Helpers.Quantize(VertexPosition),
-                Helpers.Quantize(UV),
-                Helpers.Quantize(Normal)
-            );
+        public override int GetHashCode() => HashCode.Combine(VertexPosition, UV, Normal);
 
         public override readonly string ToString() => (VertexPosition, UV, Normal).ToString();
 
@@ -244,12 +238,13 @@ public static class MeshCut
         var first = processedEdgeVerts.AddFirst(cutEdgeVerts[0]);
         var second = processedEdgeVerts.AddLast(cutEdgeVerts[1]);
         using var _pp = HashSetPool<(VData, VData)>.Get(out var processedPairs);
+        processedPairs.Add((first.Value, second.Value));
 
         bool anyLink = false;
 
         void CheckPair(VData v1, VData v2)
         {
-            if (processedPairs.Contains((v1, v2)))
+            if (processedPairs.Contains((v1, v2)) || processedPairs.Contains((v2, v1)))
                 return;
 
             if (processedEdgeVerts.First.Value.VertexPosition == v1.VertexPosition)
@@ -266,7 +261,7 @@ public static class MeshCut
             }
         }
 
-        int count = 10000;
+        int count = 1000;
         do
         {
             anyLink = false;

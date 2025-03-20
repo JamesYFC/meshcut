@@ -32,6 +32,7 @@ public class Cutter : MonoBehaviour
         mainCam = Camera.main;
         clickAction = InputSystem.actions.FindAction("Attack");
         pointerPosAction = InputSystem.actions.FindAction("PointerPos");
+        lineRenderer.material.renderQueue = 4000;
 
         clickAction.started += _ =>
         {
@@ -73,7 +74,8 @@ public class Cutter : MonoBehaviour
                 boxCastSize,
                 pointerDir,
                 raycastHits,
-                boxCastRotation
+                boxCastRotation,
+                Vector3.Distance(pointerStartPos, pointerEndPos)
             );
 
             if (debug && visualiseBoxCast)
